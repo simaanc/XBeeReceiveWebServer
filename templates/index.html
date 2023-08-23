@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+    <title>Sensor Visualization</title>
+
+    <!-- Bootstrap CSS -->
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css"
+      integrity="sha384-rbsA2VBKQhggwzxH7pPCaAqO46MgnOM80zW1RWuH61DGLwZJEdK2Kadq2F9CUG65"
+      crossorigin="anonymous" />
+
+    <!-- Material Design Icons -->
+    <link
+      href="https://fonts.googleapis.com/icon?family=Material+Icons"
+      rel="stylesheet" />
+
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.7.0/jquery.min.js"></script>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.7.1/Chart.min.js"></script>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/material-components-web/11.0.0/material-components-web.min.js"></script>
+
+    <!-- Custom CSS for index.html -->
+    <style>
+      body {
+        padding-top: 20px;
+      }
+
+      .jumbotron {
+        background-color: #f0f0f0;
+      }
+
+      .btn {
+        margin: 5px;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="jumbotron">
+      <h1 class="text-center">Welcome to Sensor Visualization</h1>
+    </div>
+
+    <div class="container">
+      <h2>Registered Devices:</h2>
+      <ul id="device-list">
+        <!-- Devices will be dynamically added here -->
+      </ul>
+    </div>
+
+    <div class="container">
+      <div class="btn-group" role="group" aria-label="Time Range Buttons">
+        <button
+          type="button"
+          class="btn btn-secondary"
+          onclick="changeTimeRange('1h')">
+          1 Hour
+        </button>
+        <button
+          type="button"
+          class="btn btn-secondary"
+          onclick="changeTimeRange('24h')">
+          24 Hours
+        </button>
+        <button
+          type="button"
+          class="btn btn-secondary"
+          onclick="changeTimeRange('1w')">
+          1 Week
+        </button>
+        <button
+          type="button"
+          class="btn btn-secondary"
+          onclick="changeTimeRange('1m')">
+          1 Month
+        </button>
+        <button
+          type="button"
+          class="btn btn-secondary"
+          onclick="changeTimeRange('all')">
+          All Data
+        </button>
+        <button
+          id="toggle-live"
+          class="btn btn-primary"
+          onclick="toggleLiveUpdate()">
+          Live Data
+        </button>
+      </div>
+    </div>
+
+    <div class="container-fluid">
+      <div class="row">
+        <div class="container-fluid" id="data-sensor"></div>
+      </div>
+    </div>
+
+    <script>
+      // Variable to store the current time range selection
+      let timeRange = "all";
+
+      let chartSensor;
+
+      function fetchDevices() {
+        return $.get("/devices");
+      }
+
+      // Function to handle button clicks for changing data time range
+      function changeTimeRange(range) {
+        timeRange = range;
+        const deviceNode = getSelectedDevice(); // Get the selected device
+
+        if (deviceNode) {
+          console.log("Selected Device:", deviceNode); // Add this line for debugging
+          requestData(); // Fetch data for the selected device with the new time range
+        }
+      }
+
+      // Variable to keep track of live update status
+      let liveUpdateEnabled = true;
+
+      // Function to toggle live updates
+      function toggleLiveUpdate() {
+        liveUpdateEnabled = !liveUpdateEnabled;
+        if (liveUpdateEnabled) {
+          // Trigger live updates when the button is clicked
+          requestData();
+        }
+      }
+
+      // Function to handle click event on device list items
+      function handleDeviceClick(deviceNode) {
+        // Clear existing data on the chart
+        chartSensor.series[0].setData([], true);
+
+        // Fetch data for the selected device and current time range
+        let requestUrl = `/data`;
+        if (deviceNode) {
+          requestUrl += `?device=${deviceNode}`;
+        }
+
+        $.get(requestUrl).done(function (data) {
+          const chartData = data.map((item) => {
+            const timestamp = parseInt(item.date_time); // Parse the timestamp as an integer (in milliseconds)
+            return [timestamp, parseFloat(item.value)];
+          });
+          chartSensor.series[0].setData(chartData, true);
+        });
+      }
+
+      // Function to add devices to the list
+      function addDeviceToList(device) {
+        const deviceList = $("#device-list");
+        const deviceLink = $("<a></a>")
+          .text(device.node) // Display the node value in the link
+          .attr("href", `/${device.node}/data`); // Use the device node value in the URL
+        const listItem = $("<li></li>").append(deviceLink);
+        deviceList.append(listItem);
+      }
+
+      // Function to populate the list of devices on the page
+      function populateDeviceList() {
+        fetchDevices().done(function (devices) {
+          for (const device of devices) {
+            addDeviceToList(device);
+          }
+        });
+      }
+
+      // Function to request data from Flask and update the chart
+      function requestData() {
+        const selectedDevice = getSelectedDevice(); // Get the selected device
+
+        // Ajax call to get the Data from Flask
+        $.get(`/data?range=${timeRange}&device=${selectedDevice}`).done(
+          function (data) {
+            console.log("Received data:", data); // Log the received data to the console
+
+            const chartData = data.map((item) => {
+              const timestamp = parseInt(item.date_time); // Parse the timestamp as an integer (in milliseconds)
+              return [timestamp, parseFloat(item.value)];
+            });
+
+            console.log("Processed chartData:", chartData); // Log the processed chart data to the console
+
+            const seriesSensor = chartSensor.series[0];
+            const shiftSensor = seriesSensor.data.length > 20;
+
+            chartSensor.series[0].setData(chartData, true, shiftSensor);
+          }
+        );
+      }
+
+      function setActiveDevice(deviceNode) {
+        // Remove the active state from all device links
+        $("#device-list a").removeClass("active");
+
+        // Find the selected device link by its text (deviceNode) and add the active state
+        $(`#device-list a:contains(${deviceNode})`).addClass("active");
+      }
+
+      // Function to get the selected device from the device list
+      function getSelectedDevice() {
+        const selectedDeviceLink = $("#device-list a.active");
+        if (selectedDeviceLink.length) {
+          return selectedDeviceLink.text();
+        }
+        return null;
+      }
+
+      function initChart() {
+        console.log("Initializing chart...");
+        chartSensor = new Highcharts.Chart({
+          chart: {
+            renderTo: "data-sensor",
+            defaultSeriesType: "area",
+          },
+          credits: {
+            enabled: false,
+          },
+          title: {
+            text: "Sensor Data",
+          },
+          xAxis: {
+            type: "datetime",
+            tickPixelInterval: 150,
+            maxZoom: 10 * 1000,
+          },
+          yAxis: {
+            minPadding: 0.2,
+            maxPadding: 0.2,
+            title: {
+              text: "Value",
+              margin: 80,
+            },
+          },
+          series: [
+            {
+              color: "#c23d23",
+              lineColor: "#303030",
+              name: "Sensor Data",
+              data: [],
+            },
+          ],
+        });
+      }
+
+      // Attach click event handler to each device list item
+      $(document).on("click", "#device-list a", function (event) {
+        event.preventDefault();
+        const deviceNode = $(this).text();
+        setActiveDevice(deviceNode); // Set the active state for the selected device
+        handleDeviceClick(deviceNode); // Fetch data for the selected device
+      });
+
+      $(document).ready(function () {
+        console.log("Document ready...");
+        initChart();
+        populateDeviceList();
+        requestData(); // Start the initial data request
+      });
+    </script>
+  </body>
+</html>
