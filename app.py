@@ -1,4 +1,4 @@
-from flask import Flask, request, render_template
+from flask import Flask, request, render_template, jsonify
 import os
 import csv
 import configparser
@@ -44,9 +44,15 @@ INFLUX_TOKEN = config["ServerConf"]["influx_token"]
 INFLUX_ORG = config["ServerConf"]["influx_org"]
 INFLUX_BUCKET = config["ServerConf"]["influx_bucket"]
 INFLUX_URL = config["ServerConf"]["influx_url"]
+
 INFLUX_BUCKET_1H = INFLUX_BUCKET + "_1h"
 INFLUX_BUCKET_24H = INFLUX_BUCKET + "_24h"
 INFLUX_BUCKET_1W = INFLUX_BUCKET + "_1w"
+INFLUX_BUCKET_DEVICES = INFLUX_BUCKET + "_devices"
+
+INFLUX_TASK_1H = INFLUX_BUCKET + "_1h_aggregation"
+INFLUX_TASK_24H = INFLUX_BUCKET + "_24h_aggregation"
+INFLUX_TASK_1W = INFLUX_BUCKET + "_1w_aggregation"
 
 # Instantiate the client library
 client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
@@ -60,16 +66,6 @@ query_api = client.query_api()
 def validate_token(token):
     return token == API_KEY
 
-def write_data_to_csv(data):
-    headers = ["source_address_64", "date_time", "data"]
-    mode = "a" if os.path.exists(CSV_FILE) else "w"
-
-    with open(CSV_FILE, mode, newline='') as csv_file:
-        csv_writer = csv.DictWriter(csv_file, fieldnames=headers)
-        if mode == "w":
-            csv_writer.writeheader()
-        csv_writer.writerow(data)
-
 if buckets_api.find_bucket_by_name(INFLUX_BUCKET_1H) is None:
     print(INFLUX_BUCKET_1H + " does not exist, creating...")
     buckets_api.create_bucket(bucket_name=INFLUX_BUCKET_1H, org=INFLUX_ORG, retention_rules=[{"type": "expire", "everySeconds": 3600}])
@@ -82,8 +78,12 @@ if buckets_api.find_bucket_by_name(INFLUX_BUCKET_1W) is None:
     print(INFLUX_BUCKET_1W + " does not exist, creating...")
     buckets_api.create_bucket(bucket_name=INFLUX_BUCKET_1W, org=INFLUX_ORG, retention_rules=[{"type": "expire", "everySeconds": 604800}])
 
-if not tasks_api.find_tasks(name="1h_aggregation"):
-    print("1h_aggregation task does not exist, creating...")
+if buckets_api.find_bucket_by_name(INFLUX_BUCKET_DEVICES) is None:
+    print(INFLUX_BUCKET_DEVICES + " does not exist, creating...")
+    buckets_api.create_bucket(bucket_name=INFLUX_BUCKET_DEVICES, org=INFLUX_ORG)
+
+if not tasks_api.find_tasks(name=INFLUX_TASK_1H):
+    print(INFLUX_TASK_1H + " does not exist, creating...")
     
     orgs = client.organizations_api().find_organizations(org=INFLUX_ORG)
      
@@ -96,10 +96,10 @@ if not tasks_api.find_tasks(name="1h_aggregation"):
         
         |> to(bucket: "{INFLUX_BUCKET_24H}", org: "{INFLUX_ORG}")
     '''
-    tasks_api.create_task_every(name="1h_aggregation", flux=query, every="1h", organization=orgs[0])
+    tasks_api.create_task_cron(name=INFLUX_TASK_1H, flux=query, cron="0 * * * *", org_id=orgs[0].id)
 
-if not tasks_api.find_tasks(name="24h_aggregation"):
-    print("24h_aggregation task does not exist, creating...")
+if not tasks_api.find_tasks(name=INFLUX_TASK_24H):
+    print(INFLUX_TASK_1H + " does not exist, creating...")
     
     orgs = client.organizations_api().find_organizations(org=INFLUX_ORG)
      
@@ -113,7 +113,7 @@ if not tasks_api.find_tasks(name="24h_aggregation"):
         |> to(bucket: "{INFLUX_BUCKET_1W}", org: "{INFLUX_ORG}")
     '''
     
-    tasks_api.create_task_every(name="24h_aggregation", flux=query, every="24h", organization=orgs[0])
+    tasks_api.create_task_cron(name=INFLUX_TASK_24H, flux=query, cron="0 0 * * *", org_id=orgs[0].id)
 
 # Flask routes
 @app.route('/')
@@ -138,8 +138,6 @@ def receive_data():
         print("Received POST request data:")
         print(data)
 
-        # Store data in CSV file
-        write_data_to_csv(data)
 
         node = request.json["source_address_64"]
         value = request.json["data"]
@@ -154,7 +152,7 @@ def receive_data():
 
         value = float(value)
 
-        dict_structure = {
+        data_dict_structure = {
             "measurement": "sensor_data",
             "tags": {"node": node},
             "fields": {
@@ -162,9 +160,20 @@ def receive_data():
             },
             "time": time
         }
+        
+        devices_dict_structure = {
+            "measurement": "devices_list",
+            "tags": {"node": node},
+            "fields": {
+                "node": node,
+            },
+            "time": "2023-01-01T00:00:00Z"
+        }
 
-        point = Point.from_dict(dict_structure)
-        write_api.write(INFLUX_BUCKET_1H, INFLUX_ORG, point)
+        data_point = Point.from_dict(data_dict_structure)
+        devices_point = Point.from_dict(devices_dict_structure)
+        write_api.write(INFLUX_BUCKET_1H, INFLUX_ORG, data_point)
+        write_api.write(INFLUX_BUCKET_DEVICES, INFLUX_ORG, devices_point)
         return {"result": "data accepted for processing"}, 200
     
     except InfluxDBError as e:
@@ -178,25 +187,19 @@ def receive_data():
     
 @app.route("/devices", methods=["GET"])
 def get_devices():
-    try:
-        with mysql.connector.connect(
-            host=sqlhost,
-            user=sqluser,
-            password=sqlpass,
-            database="zigbee_data",
-            port=sqlport,
-        ) as connection:
-            select_query = "SELECT id, node FROM devices_list"
-            with connection.cursor() as cursor:
-                cursor.execute(select_query)
-                device_rows = cursor.fetchall()
+    query = f'''
+    from(bucket: "{INFLUX_BUCKET_DEVICES}")
+        |> range(start: 2023-01-01T00:00:00Z, stop: 2023-01-01T00:00:01Z)
+    '''
+    
+    records = query_api.query_stream(org=INFLUX_ORG, query=query)
 
-                devices = [{"id": row[0], "node": row[1]} for row in device_rows]
+    devices = []  # Initialize the devices list outside the loop
 
-                return jsonify(devices)
-    except Error as e:
-        print(e)
-        return jsonify([])
+    for record in records:
+        devices.append({"id": record["table"], "node": record["node"]})  # Append each record to the devices list
+        
+    return jsonify(devices)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)

@@ -21,7 +21,7 @@
 
     <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.7.0/jquery.min.js"></script>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.7.1/Chart.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/material-components-web/11.0.0/material-components-web.min.js"></script>
 
@@ -94,11 +94,11 @@
       </div>
     </div>
 
-    <div class="container-fluid">
+    <!-- <div class="container-fluid">
       <div class="row">
         <div class="container-fluid" id="data-sensor"></div>
       </div>
-    </div>
+    </div> -->
 
     <script>
       // Variable to store the current time range selection
@@ -213,43 +213,6 @@
         return null;
       }
 
-      function initChart() {
-        console.log("Initializing chart...");
-        chartSensor = new Highcharts.Chart({
-          chart: {
-            renderTo: "data-sensor",
-            defaultSeriesType: "area",
-          },
-          credits: {
-            enabled: false,
-          },
-          title: {
-            text: "Sensor Data",
-          },
-          xAxis: {
-            type: "datetime",
-            tickPixelInterval: 150,
-            maxZoom: 10 * 1000,
-          },
-          yAxis: {
-            minPadding: 0.2,
-            maxPadding: 0.2,
-            title: {
-              text: "Value",
-              margin: 80,
-            },
-          },
-          series: [
-            {
-              color: "#c23d23",
-              lineColor: "#303030",
-              name: "Sensor Data",
-              data: [],
-            },
-          ],
-        });
-      }
-
       // Attach click event handler to each device list item
       $(document).on("click", "#device-list a", function (event) {
         event.preventDefault();
@@ -260,7 +223,6 @@
 
       $(document).ready(function () {
         console.log("Document ready...");
-        initChart();
         populateDeviceList();
         requestData(); // Start the initial data request
       });
