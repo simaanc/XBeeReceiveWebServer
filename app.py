@@ -48,11 +48,13 @@ INFLUX_URL = config["ServerConf"]["influx_url"]
 INFLUX_BUCKET_1H = INFLUX_BUCKET + "_1h"
 INFLUX_BUCKET_24H = INFLUX_BUCKET + "_24h"
 INFLUX_BUCKET_1W = INFLUX_BUCKET + "_1w"
+INFLUX_BUCKET_1M = INFLUX_BUCKET + "_1m"
 INFLUX_BUCKET_DEVICES = INFLUX_BUCKET + "_devices"
 
 INFLUX_TASK_1H = INFLUX_BUCKET + "_1h_aggregation"
 INFLUX_TASK_24H = INFLUX_BUCKET + "_24h_aggregation"
 INFLUX_TASK_1W = INFLUX_BUCKET + "_1w_aggregation"
+INFLUX_TASK_1M = INFLUX_BUCKET + "_1m_aggregation"
 
 # Instantiate the client library
 client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
@@ -77,6 +79,10 @@ if buckets_api.find_bucket_by_name(INFLUX_BUCKET_24H) is None:
 if buckets_api.find_bucket_by_name(INFLUX_BUCKET_1W) is None:
     print(INFLUX_BUCKET_1W + " does not exist, creating...")
     buckets_api.create_bucket(bucket_name=INFLUX_BUCKET_1W, org=INFLUX_ORG, retention_rules=[{"type": "expire", "everySeconds": 604800}])
+
+if buckets_api.find_bucket_by_name(INFLUX_BUCKET_1M) is None:
+    print(INFLUX_BUCKET_1M + " does not exist, creating...")
+    buckets_api.create_bucket(bucket_name=INFLUX_BUCKET_1M, org=INFLUX_ORG, retention_rules=[{"type": "expire", "everySeconds": 2592000}])
 
 if buckets_api.find_bucket_by_name(INFLUX_BUCKET_DEVICES) is None:
     print(INFLUX_BUCKET_DEVICES + " does not exist, creating...")
@@ -114,6 +120,20 @@ if not tasks_api.find_tasks(name=INFLUX_TASK_24H):
     '''
     
     tasks_api.create_task_cron(name=INFLUX_TASK_24H, flux=query, cron="0 0 * * *", org_id=orgs[0].id)
+
+if not tasks_api.find_tasks(name=INFLUX_TASK_1M):
+    print(INFLUX_BUCKET_1M + " does not exist, creating...")
+    
+    orgs = client.organizations_api().find_organizations(org=INFLUX_ORG)
+     
+    query = f'''
+    data = from(bucket: "{INFLUX_BUCKET_1W}")
+        |> range(start: -duration(v: int(v: 7d)))
+    data        
+        |> to(bucket: "{INFLUX_BUCKET_1M}", org: "{INFLUX_ORG}")
+    '''
+    
+    tasks_api.create_task_cron(name=INFLUX_TASK_1M, flux=query, cron="0 0 * * 0", org_id=orgs[0].id)
 
 # Flask routes
 @app.route('/')
@@ -184,6 +204,44 @@ def receive_data():
     except Exception as e:
         print("Error:", e)
         return "Error processing data", 500
+    
+@app.route('/data')
+def get_data():
+    device = request.args.get('device')
+    time_range = request.args.get('range')
+
+    if time_range == '1h':
+        bucket = INFLUX_BUCKET_1H
+        duration = '1h'
+    elif time_range == '24h':
+        bucket = INFLUX_BUCKET_24H
+        duration = '24h'
+    elif time_range == '1w':
+        bucket = INFLUX_BUCKET_1W
+        duration = '1w'
+    elif time_range == '1m':
+        bucket = INFLUX_BUCKET_1M  # Use the 1w bucket for 1 Month
+        duration = '4w'  # Adjust the duration as needed
+    else:
+        return jsonify([])  # Invalid time range, return empty data
+
+    query = f'''
+    from(bucket: "{bucket}")
+        |> range(start: -{duration})
+        |> filter(fn: (r) => r._measurement == "sensor_data" and r.node == "{device}")
+    '''
+    
+    result = query_api.query(org=INFLUX_ORG, query=query)
+    data = []
+
+    for table in result:
+        for record in table.records:
+            data.append({
+                "time": record.get_time(),
+                "value": record.get_value()
+            })
+    
+    return jsonify(data)
     
 @app.route("/devices", methods=["GET"])
 def get_devices():

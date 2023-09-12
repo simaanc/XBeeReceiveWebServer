@@ -80,12 +80,6 @@
           1 Month
         </button>
         <button
-          type="button"
-          class="btn btn-secondary"
-          onclick="changeTimeRange('all')">
-          All Data
-        </button>
-        <button
           id="toggle-live"
           class="btn btn-primary"
           onclick="toggleLiveUpdate()">
@@ -100,11 +94,38 @@
       </div>
     </div> -->
 
+    <div>
+      <canvas id="myChart"></canvas>
+    </div>
+
     <script>
       // Variable to store the current time range selection
       let timeRange = "all";
 
       let chartSensor;
+
+
+      const ctx = document.getElementById('myChart');
+
+      new Chart(ctx, {
+        type: 'line',
+        data: {
+          datasets: [{
+            label: 'My First Dataset',
+            data: [65, 59, 80, 81, 56, 55, 40],
+            fill: false,
+            borderColor: 'rgb(75, 192, 192)',
+            tension: 0.1
+          }]
+        },
+        options: {
+          scales: {
+            y: {
+              beginAtZero: true
+            }
+          }
+        }
+      });
 
       function fetchDevices() {
         return $.get("/devices");
